@@ -41,26 +41,45 @@
 
 1. 克隆项目
 ```bash
-git clone https://github.com/your-username/fund-selector-cn.git
-cd fund-selector-cn
+git clone https://github.com/StanleyChanH/FUND-SELECTOR-CN.git
+cd FUND-SELECTOR-CN
 ```
 
-2. 使用uv创建虚拟环境并安装依赖
+2. 运行应用（多种启动方式）
+
+#### 🚀 一键启动（推荐）
 ```bash
+chmod +x start.sh  # 添加执行权限（仅第一次需要）
+./start.sh
+```
+
+#### 🛠 手动启动
+```bash
+# 创建虚拟环境并安装依赖
 uv venv
 uv sync
-```
 
-3. 运行应用
-```bash
-# 方法1: 使用uv运行启动脚本
-uv run run.py
-
-# 方法2: 直接使用uv运行Streamlit
+# 运行应用
 uv run streamlit run app.py
 ```
 
+#### 📦 使用启动脚本
+```bash
+uv run run.py
+```
+
 应用将在浏览器中打开，默认地址为 `http://localhost:48501`
+
+### 🔧 一键启动脚本功能
+
+项目包含 `start.sh` 一键启动脚本，自动处理以下任务：
+
+- **环境检查**：验证uv包管理器是否已安装
+- **虚拟环境创建**：自动创建和管理.venv虚拟环境
+- **依赖同步**：运行`uv sync`安装所有项目依赖
+- **应用启动**：启动Streamlit应用并自动打开浏览器
+
+> 💡 **提示**：首次运行会自动安装依赖，后续启动会更快。
 
 ### 配置说明
 
@@ -80,9 +99,11 @@ uv run streamlit run app.py
 fund-selector-cn/
 ├── app.py                 # 主应用入口
 ├── run.py                 # 启动脚本
+├── start.sh               # 🚀 一键启动脚本
 ├── pyproject.toml         # 项目配置和依赖
 ├── README.md             # 项目说明文档
 ├── CLAUDE.md             # 开发说明文档
+├── LICENSE               # MIT开源许可证
 └── src/                  # 源代码目录
     ├── __init__.py       # 包初始化文件
     ├── data_loader.py    # 数据加载模块
