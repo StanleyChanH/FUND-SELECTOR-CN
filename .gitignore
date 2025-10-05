@@ -164,3 +164,4 @@ temp/
 # Claude Code development files
 .claude/
 .claude-*
+CLAUDE.md
