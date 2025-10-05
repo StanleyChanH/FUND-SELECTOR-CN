@@ -1,0 +1,31 @@
+[project]
+name = "fund-selector-cn"
+version = "0.1.0"
+description = "基于Tushare和Streamlit的交互式公募基金量化分析平台"
+authors = [
+    {name = "hajimi", email = "hajimi@example.com"}
+]
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "streamlit>=1.28.0",
+    "pandas>=2.0.0",
+    "numpy>=1.24.0",
+    "plotly>=5.15.0",
+    "tushare>=1.2.89",
+    "pandas-ta>=0.3.14b0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=7.0.0",
+    "black>=23.0.0",
+    "ruff>=0.1.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
