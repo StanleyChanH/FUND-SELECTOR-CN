@@ -183,6 +183,14 @@ A: 建议：
 - 减少选择的技术指标数量
 - 检查网络连接速度
 
+## 路线图
+
+- **v2.0 · 自定义 SQL 数据源与数据本地落地**（目标 2027 Q1 · [里程碑 1](https://github.com/StanleyChanH/FUND-SELECTOR-CN/milestone/1)）
+  - [ ] 抽象统一 DataProvider 接口，内置 SQLite / PostgreSQL / MySQL / ClickHouse 适配
+  - [ ] 数据本地落地：Parquet 缓存 + DuckDB 查询
+  - [ ] Tushare 迁移为默认 Provider，仅承担数据下载通道
+- 需求与进度见 [Issues](https://github.com/StanleyChanH/FUND-SELECTOR-CN/issues)
+
 ## 贡献指南
 
 欢迎提交Issue和Pull Request来改进这个项目！
