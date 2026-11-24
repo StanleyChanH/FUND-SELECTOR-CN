@@ -7,15 +7,10 @@
 
 import streamlit as st
 import pandas as pd
-import numpy as np
 import plotly.express as px
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 from datetime import datetime, timedelta
-import tushare as ts
 
 # 导入pandas-ta
-import pandas_ta as ta
 
 # 设置页面配置
 st.set_page_config(
@@ -31,13 +26,13 @@ st.markdown("---")
 
 # 导入自定义模块
 from src.data_loader import (
-    initialize_tushare, load_fund_data, load_fund_basic_info,
+    initialize_datasource, load_fund_data, load_fund_basic_info,
     load_fund_manager_info, load_fund_share_data, load_fund_div_data,
     load_benchmark_data, preprocess_fund_data
 )
 from src.indicators import (
     calculate_technical_indicators, calculate_performance_metrics,
-    calculate_rolling_volatility, detect_golden_cross_death_cross
+    calculate_rolling_volatility
 )
 from src.visualization import (
     create_nav_chart, create_risk_charts, create_technical_indicator_charts,
@@ -49,16 +44,46 @@ def create_sidebar():
     """创建侧边栏控制面板"""
     st.sidebar.title("📊 控制面板")
 
-    # Tushare Token输入
-    token = st.sidebar.text_input(
-        "Tushare Pro Token",
-        type="password",
-        help="请输入您的Tushare Pro API Token"
+    # v2.0: 数据源选择（Tushare 在线 / 自定义 SQL 库 / 纯本地缓存）
+    data_mode = st.sidebar.selectbox(
+        "数据源",
+        ["tushare", "sql", "cache_only"],
+        format_func=lambda x: {
+            "tushare": "Tushare Pro（在线）",
+            "sql": "自定义 SQL 数据源",
+            "cache_only": "本地缓存（离线）",
+        }[x],
+        help="SQL 模式读取 config.yaml 中配置的自建数据库；离线模式只用已落地的本地缓存",
     )
 
-    if not token:
-        st.sidebar.warning("请输入Tushare Pro Token以继续")
-        return None
+    token = None
+    config_path = None
+    if data_mode == "tushare":
+        token = st.sidebar.text_input(
+            "Tushare Pro Token",
+            type="password",
+            help="请输入您的Tushare Pro API Token",
+        )
+        if not token:
+            st.sidebar.warning("请输入Tushare Pro Token以继续")
+            return None
+    elif data_mode == "sql":
+        config_path = st.sidebar.text_input(
+            "配置文件路径",
+            value="config.yaml",
+            help="包含 datasource.dsn 与各数据集 SQL 查询的配置文件（见 config.example.yaml）",
+        )
+        import os as _os
+        if not _os.path.exists(config_path):
+            st.sidebar.warning(f"未找到配置文件 {config_path}，请先复制 config.example.yaml 编辑")
+            return None
+
+    use_cache = st.sidebar.checkbox(
+        "启用本地 Parquet 缓存",
+        value=data_mode != "cache_only",
+        disabled=data_mode == "cache_only",
+        help="下载的数据自动落地本地，重复分析零网络消耗；可用 DuckDB 离线查询",
+    )
 
     # 基金代码输入
     fund_code = st.sidebar.text_input(
@@ -132,6 +157,9 @@ def create_sidebar():
 
     return {
         'token': token,
+        'data_mode': data_mode,
+        'config_path': config_path,
+        'use_cache': use_cache,
         'fund_code': fund_code,
         'start_date': start_date_str,
         'end_date': end_date_str,
@@ -286,11 +314,28 @@ def main():
         return
 
     try:
-        # 初始化Tushare API
-        pro = initialize_tushare(params['token'])
+        # 初始化统一数据源（v2.0：Tushare / 自定义 SQL / 本地缓存）
+        if params['data_mode'] == 'cache_only':
+            pro = initialize_datasource(
+                config_path=params['config_path'], token=None, use_cache=True)
+        else:
+            pro = initialize_datasource(
+                config_path=params['config_path'], token=params['token'],
+                use_cache=params['use_cache'])
         if pro is None:
-            st.error("无法初始化Tushare API，请检查Token是否正确")
+            st.error("无法初始化数据源，请检查 Token / 配置文件是否正确")
             return
+
+        with st.sidebar.expander("数据源状态"):
+            info = pro.describe()
+            st.caption({
+                "sql": "SQL 数据源（自建库）",
+                "tushare": "Tushare Pro（在线）",
+                None: "—",
+            }[info.get("sql") or info.get("remote")])
+            st.caption(f"缓存目录: {info.get('cache') or '未启用'}")
+            for dataset, stat in (info.get("cache_stats") or {}).items():
+                st.caption(f"{dataset}: {stat['files']} 文件 / {stat['bytes'] / 1024:.0f} KB")
 
         # 显示加载状态
         with st.spinner("正在加载数据..."):

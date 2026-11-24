@@ -165,3 +165,9 @@ temp/
 .claude/
 .claude-*
 CLAUDE.md
+
+# v2.0: local data cache & user config
+.fund_cache/
+data_lake/
+config.yaml
+config.yml

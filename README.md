@@ -1,6 +1,10 @@
 # 基金量化分析平台
 
-基于Tushare和Streamlit的交互式公募基金量化分析平台，提供全面的基金分析功能和可视化展示。
+基于Streamlit的交互式公募基金量化分析平台，提供全面的基金分析功能和可视化展示。
+
+> **v2.0 已发布**：数据层全面重构——**自定义 SQL 数据源**（SQLite / PostgreSQL / MySQL / ClickHouse / DuckDB）、
+> **本地数据落地**（Parquet 缓存 + DuckDB 离线查询），Tushare 退化为「数据下载通道之一」。
+> 详见下方 [🔗 自定义数据源（v2.0）](#-自定义数据源v20) 章节，实现讨论见 [#1](https://github.com/StanleyChanH/FUND-SELECTOR-CN/issues/1)。
 
 ## 功能特性
 
@@ -25,7 +29,7 @@
 - **后端**: Python 3.12+
 - **数据处理**: Pandas, NumPy
 - **可视化**: Plotly
-- **数据源**: Tushare Pro API
+- **数据源**: DataProvider 统一抽象（Tushare / 自定义 SQL 数据库 / 本地 Parquet 缓存）
 - **技术指标**: pandas-ta (专业库，提供150+技术指标)
 
 ## 安装使用
@@ -100,15 +104,24 @@ fund-selector-cn/
 ├── app.py                 # 主应用入口
 ├── run.py                 # 启动脚本
 ├── start.sh               # 🚀 一键启动脚本
+├── config.example.yaml    # v2.0 数据源配置模板（复制为 config.yaml 使用）
 ├── pyproject.toml         # 项目配置和依赖
 ├── README.md             # 项目说明文档
-├── CLAUDE.md             # 开发说明文档
 ├── LICENSE               # MIT开源许可证
+├── tests/                # 单元测试（缓存 / SQL 数据源 / 读取链路 / 同步）
 └── src/                  # 源代码目录
     ├── __init__.py       # 包初始化文件
-    ├── data_loader.py    # 数据加载模块
+    ├── config.py         # v2.0 配置加载（YAML/JSON + 环境变量）
+    ├── cache.py          # v2.0 Parquet 本地数据落地
+    ├── datasource.py     # v2.0 DataSource 统一门面（SQL→缓存→远端）
+    ├── sync.py           # v2.0 数据落地 CLI（python -m src.sync）
+    ├── data_loader.py    # 数据加载模块（兼容 v1 签名）
     ├── indicators.py     # 技术指标计算模块 (使用pandas-ta)
-    └── visualization.py  # 数据可视化模块
+    ├── visualization.py  # 数据可视化模块
+    └── providers/        # v2.0 DataProvider 抽象层
+        ├── base.py       # 规范数据集结构 + 基类
+        ├── tushare_provider.py  # Tushare 适配器（下载通道）
+        └── sql_provider.py      # 自定义 SQL 数据源适配器
 ```
 
 ## 使用指南
@@ -183,12 +196,109 @@ A: 建议：
 - 减少选择的技术指标数量
 - 检查网络连接速度
 
+## 🔗 自定义数据源（v2.0）
+
+v2.0 把数据层重构为「**自定义 SQL 数据源 + 本地数据落地 + Tushare 下载通道**」三层架构：
+
+```
+读取链路:  自建 SQL 库（实时真源，命中即返回）
+           → 本地 Parquet 缓存（覆盖区间则零网络）
+           → Tushare（仅补缺失区间，拉回后自动落地）
+```
+
+### 快速上手
+
+1. 复制配置模板并编辑：
+
+   ```bash
+   cp config.example.yaml config.yaml
+   ```
+
+2. 把 `datasource.provider` 改为 `sql`，填入你的数据库 DSN 与各数据集查询：
+
+   ```yaml
+   datasource:
+     provider: sql
+     dsn: postgresql+psycopg2://user:pass@host:5432/funds   # 任意 SQLAlchemy DSN
+     datasets:
+       fund_nav:
+         query: >-
+           SELECT fund_code, nav_date, net_value
+           FROM my_nav_table
+           WHERE fund_code = :code
+             AND nav_date BETWEEN :start_date AND :end_date
+           ORDER BY nav_date
+         column_map: {fund_code: ts_code, net_value: unit_nav}   # 把你的列名映射到规范列
+   ```
+
+3. 启动应用，侧边栏「数据源」选择 **自定义 SQL 数据源** 即可；Tushare Token 不再是必填项。
+
+### 支持的数据库（任选其一）
+
+| 数据库 | DSN 示例 | 安装额外依赖 |
+|---|---|---|
+| SQLite | `sqlite:///data/funds.db` | 无（标准库） |
+| PostgreSQL | `postgresql+psycopg2://user:pass@host:5432/db` | `pip install fund-selector-cn[postgresql]` |
+| MySQL | `mysql+pymysql://user:pass@host:3306/db` | `pip install fund-selector-cn[mysql]` |
+| ClickHouse | `clickhouse+native://host/db` | `pip install fund-selector-cn[clickhouse]` |
+| DuckDB | `duckdb:///data/funds.duckdb` | `pip install fund-selector-cn[duckdb]` |
+
+### 查询绑定参数
+
+每条查询可用的绑定参数（按需选用，不用的可以不写）：
+
+| 参数 | 格式 | 说明 |
+|---|---|---|
+| `:code` | `510300.SH` | 基金/指数代码 |
+| `:start_date` / `:end_date` | `20240102` | 紧凑日期（含端点） |
+| `:start_date_iso` / `:end_date_iso` | `2024-01-02` | ISO 日期，适配 DATE / ISO 字符串列 |
+
+返回列必须覆盖对应数据集的必选列（列名不同时用 `column_map` 重命名）：
+
+| 数据集 | 必选列 | 可选列 |
+|---|---|---|
+| `fund_nav` | ts_code, nav_date, unit_nav | adj_nav |
+| `fund_basic` | ts_code, name | management, found_date, benchmark... |
+| `fund_manager` | ts_code, name | ann_date, begin_date, end_date, edu... |
+| `fund_share` | ts_code, trade_date, fd_share | fund_type |
+| `fund_div` | ts_code, ex_date | ann_date, dividend, base_share |
+| `index_daily` | ts_code, trade_date, close | open, high, low, pct_chg... |
+
+### 本地数据落地与离线分析
+
+所有从 Tushare 下载的数据自动以 Parquet 落地到缓存目录（默认 `.fund_cache/`，可在配置中修改），
+重复分析不再请求网络；界面侧边栏可随时开关。
+
+批量预下载（无 UI）：
+
+```bash
+python -m src.sync --codes 510300.SH,000300.SH --start 20200101 --end 20261124
+```
+
+落地后可用 DuckDB 直接对 Parquet 做离线 SQL 分析（可选依赖）：
+
+```sql
+SELECT nav_date, unit_nav
+FROM read_parquet(".fund_cache/fund_nav/*.parquet")
+WHERE ts_code = '510300.SH'
+ORDER BY nav_date;
+```
+
+代码中同样可用：`DataSource.query_local("SELECT ... FROM read_parquet(...)")`。
+
+### 兼容性
+
+- v1 的 `initialize_tushare(token)` / `load_fund_data(pro, ...)` 等调用方式**完全兼容**，
+  旧脚本无需修改；传入的 tushare pro 对象会被自动包装为 Provider。
+- 所有适配器均有单元测试覆盖（`uv run pytest`，19 个用例，无网络依赖）。
+
+
 ## 路线图
 
-- **v2.0 · 自定义 SQL 数据源与数据本地落地**（目标 2027 Q1 · [里程碑 1](https://github.com/StanleyChanH/FUND-SELECTOR-CN/milestone/1)）
-  - [ ] 抽象统一 DataProvider 接口，内置 SQLite / PostgreSQL / MySQL / ClickHouse 适配
-  - [ ] 数据本地落地：Parquet 缓存 + DuckDB 查询
-  - [ ] Tushare 迁移为默认 Provider，仅承担数据下载通道
+- **v2.0 · 自定义 SQL 数据源与数据本地落地** ✅ 已完成（2026-11，[里程碑 1](https://github.com/StanleyChanH/FUND-SELECTOR-CN/milestone/1)）
+  - [x] 抽象统一 DataProvider 接口，内置 SQLite / PostgreSQL / MySQL / ClickHouse 适配
+  - [x] 数据本地落地：Parquet 缓存 + DuckDB 查询
+  - [x] Tushare 迁移为默认 Provider，仅承担数据下载通道
 - 需求与进度见 [Issues](https://github.com/StanleyChanH/FUND-SELECTOR-CN/issues)
 
 ## 贡献指南

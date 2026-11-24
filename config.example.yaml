@@ -1,0 +1,51 @@
+# FUND-SELECTOR-CN v2.0 配置模板
+# 复制为 config.yaml 后按需修改；YAML/JSON 均可（config.json 同结构）。
+# 查找顺序：FUND_SELECTOR_CONFIG 环境变量 > 工作目录 config.yaml|yml|json > 内置默认。
+
+datasource:
+  # provider: tushare（默认，在线下载） | sql（自建数据库为真源）
+  provider: tushare
+  # tushare 模式可把 token 写在这里；留空则用界面输入（推荐，避免泄漏）
+  token: ""
+
+  # —— 切换为自定义 SQL 数据源时取消下面注释 ——
+  # provider: sql
+  # 任意 SQLAlchemy 兼容 DSN：
+  #   SQLite:      sqlite:///data/funds.db
+  #   PostgreSQL:  postgresql+psycopg2://user:pass@host:5432/funds
+  #   MySQL:       mysql+pymysql://user:pass@host:3306/funds
+  #   ClickHouse:  clickhouse+native://host/funds
+  #   DuckDB:      duckdb:///data/funds.duckdb
+  # dsn: sqlite:///data/funds.db
+  #
+  # 每个数据集一条 SQL，可用绑定参数 :code / :start_date / :end_date。
+  # 返回列必须包含该数据集的必选列（可用 column_map 把你的列名映射过去）：
+  #   fund_nav:     ts_code, nav_date, unit_nav（可选 adj_nav）
+  #   fund_basic:   ts_code, name
+  #   fund_manager: ts_code, name
+  #   fund_share:   ts_code, trade_date, fd_share
+  #   fund_div:     ts_code, ex_date
+  #   index_daily:  ts_code, trade_date, close
+  # datasets:
+  #   fund_nav:
+  #     query: >-
+  #       SELECT ts_code, nav_date, unit_nav, adj_nav
+  #       FROM fund_nav
+  #       WHERE ts_code = :code
+  #         AND nav_date BETWEEN :start_date AND :end_date
+  #       ORDER BY nav_date
+  #     # column_map: {fund_code: ts_code, net_value: unit_nav}
+  #   index_daily:
+  #     query: >-
+  #       SELECT ts_code, trade_date, close
+  #       FROM index_daily
+  #       WHERE ts_code = :code
+  #         AND trade_date BETWEEN :start_date AND :end_date
+  #       ORDER BY trade_date
+
+cache:
+  enabled: true
+  dir: .fund_cache
+  # Tushare 下载的数据自动落地到这里；重复分析直接读缓存。
+  # 离线分析示例（DuckDB）：
+  #   SELECT * FROM read_parquet(".fund_cache/fund_nav/*.parquet") LIMIT 5

@@ -6,10 +6,8 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-from datetime import datetime
 
 def create_nav_chart(df, benchmark_df=None, show_ma=True, show_boll=False, short_ma=20, long_ma=60):
     """

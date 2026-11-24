@@ -1,7 +1,7 @@
 [project]
 name = "fund-selector-cn"
-version = "0.1.0"
-description = "基于Tushare和Streamlit的交互式公募基金量化分析平台"
+version = "2.0.0"
+description = "交互式公募基金量化分析平台：自定义 SQL 数据源 + 本地数据落地 + Tushare 下载通道"
 authors = [
     {name = "hajimi", email = "hajimi@example.com"}
 ]
@@ -14,14 +14,30 @@ dependencies = [
     "plotly>=5.15.0",
     "tushare>=1.2.89",
     "pandas-ta>=0.3.14b0",
+    "pyyaml>=6.0",
+    "pyarrow>=14.0.0",
 ]
+
+[project.optional-dependencies]
+sql = ["SQLAlchemy>=2.0"]
+postgresql = ["psycopg2-binary>=2.9"]
+mysql = ["pymysql>=1.1"]
+clickhouse = ["clickhouse-driver>=0.2", "clickhouse-sqlalchemy>=0.2"]
+duckdb = ["duckdb>=1.0"]
+all = ["SQLAlchemy>=2.0", "psycopg2-binary>=2.9", "pymysql>=1.1",
+       "clickhouse-driver>=0.2", "clickhouse-sqlalchemy>=0.2", "duckdb>=1.0"]
 
 [dependency-groups]
 dev = [
     "pytest>=7.0.0",
     "black>=23.0.0",
     "ruff>=0.1.0",
+    "SQLAlchemy>=2.0",
+    "duckdb>=1.0",
 ]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src"]

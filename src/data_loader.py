@@ -1,231 +1,177 @@
-"""
-数据加载模块
-负责从Tushare API获取基金相关数据
+"""数据加载模块（v2.0 重构）。
+
+对外函数签名与 v1 完全兼容：load_fund_data(source, code, start, end) 等。
+source 现在接受三类对象：
+    1. DataSource（推荐）——由 initialize_datasource() 构造
+    2. v1 遗留的 tushare pro api 对象——自动包装为 TushareProvider
+    3. 任意 DataProvider——自动配一个直读的 DataSource
 """
 
 import streamlit as st
 import pandas as pd
-import numpy as np
-from datetime import datetime, timedelta
 import tushare as ts
-import time
+
+from .datasource import DataSource
+from .providers.tushare_provider import TushareProvider
+
 
 def initialize_tushare(token: str):
-    """初始化Tushare API"""
+    """（v1 兼容）初始化 Tushare API。"""
     try:
         ts.set_token(token)
-        pro = ts.pro_api()
-        return pro
+        return ts.pro_api()
     except Exception as e:
         st.error(f"Tushare API初始化失败: {str(e)}")
         return None
 
-@st.cache_data(ttl=3600)
-def load_fund_data(_pro, fund_code: str, start_date: str, end_date: str):
-    """
-    加载基金净值数据
+
+def initialize_datasource(config_path=None, token=None, use_cache=True):
+    """（v2.0 推荐）初始化统一数据源。
 
     Args:
-        _pro: Tushare Pro API对象
-        fund_code: 基金代码
-        start_date: 开始日期
-        end_date: 结束日期
-
-    Returns:
-        DataFrame: 基金净值数据
+        config_path: 配置文件路径（config.yaml/json），None 时自动查找。
+        token: Tushare Token（界面输入，优先于配置文件）。
+        use_cache: 是否启用本地 Parquet 缓存。
     """
+    from .config import load_config, validate_config
+
+    cfg = load_config(config_path)
+    for problem in validate_config(cfg):
+        st.warning(f"配置提示: {problem}")
+    ds = DataSource.from_config(cfg, token=token, use_cache=use_cache)
+    if ds.sql is None and ds.remote is None and ds.cache is None:
+        return None
+    return ds
+
+
+def _as_datasource(source) -> DataSource:
+    """把任意Supported输入规范为 DataSource。"""
+    if isinstance(source, DataSource):
+        return source
+    if source is None:
+        raise ValueError("数据源未初始化")
+    # v1 遗留：tushare pro api 对象（有 fund_nav / index_daily 等方法）
+    if hasattr(source, "fund_nav") or hasattr(source, "index_daily"):
+        return DataSource(remote_provider=TushareProvider(pro=source))
+    # 裸 Provider
+    from .providers.base import DataProvider
+
+    if isinstance(source, DataProvider):
+        return DataSource(remote_provider=source)
+    raise TypeError(f"无法识别的数据源类型: {type(source)}")
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def load_fund_data(_source, fund_code: str, start_date: str, end_date: str):
+    """加载基金净值数据（SQL 库 → 本地缓存 → Tushare 下载并落地）。"""
     try:
-        # 转换基金代码格式 (510300.SH -> 510300)
-        ts_code = fund_code
-
-        # 获取基金净值数据
-        df_nav = _pro.fund_nav(ts_code=ts_code, start_date=start_date, end_date=end_date)
-
-        if df_nav.empty:
-            st.warning(f"未找到基金 {fund_code} 的净值数据，尝试使用fund_daily接口")
-            # 尝试使用fund_daily接口
-            df_daily = _pro.fund_daily(ts_code=ts_code, start_date=start_date, end_date=end_date)
-            if df_daily.empty:
-                st.error(f"无法获取基金 {fund_code} 的任何数据")
-                return None
-            return df_daily
-
-        return df_nav
-
+        df = _as_datasource(_source).fetch(
+            "fund_nav", code=fund_code, start_date=start_date, end_date=end_date)
+        if df is None or df.empty:
+            st.warning(f"未找到基金 {fund_code} 的净值数据")
+            return None
+        return df
     except Exception as e:
         st.error(f"加载基金数据失败: {str(e)}")
         return None
 
-@st.cache_data(ttl=86400)  # 基本信息缓存24小时
-def load_fund_basic_info(_pro, fund_code: str):
-    """
-    加载基金基本信息
 
-    Args:
-        _pro: Tushare Pro API对象
-        fund_code: 基金代码
-
-    Returns:
-        DataFrame: 基金基本信息
-    """
+@st.cache_data(ttl=86400, show_spinner=False)
+def load_fund_basic_info(_source, fund_code: str):
+    """加载基金基本信息。"""
     try:
-        df_basic = _pro.fund_basic(market='E')
-        # 转换基金代码格式
-        fund_code_clean = fund_code.split('.')[0]
-
-        # 查找对应基金
-        fund_info = df_basic[df_basic['ts_code'] == fund_code]
-
-        if fund_info.empty:
-            # 尝试其他匹配方式
-            fund_info = df_basic[df_basic['ts_code'].str.contains(fund_code_clean)]
-
-        if fund_info.empty:
+        df = _as_datasource(_source).fetch("fund_basic", code=fund_code)
+        if df is None or df.empty:
             st.warning(f"未找到基金 {fund_code} 的基本信息")
             return None
-
-        return fund_info.iloc[0]
-
+        return df.iloc[0]
     except Exception as e:
         st.error(f"加载基金基本信息失败: {str(e)}")
         return None
 
-@st.cache_data(ttl=86400)
-def load_fund_manager_info(_pro, fund_code: str):
-    """
-    加载基金经理信息
 
-    Args:
-        _pro: Tushare Pro API对象
-        fund_code: 基金代码
-
-    Returns:
-        DataFrame: 基金经理信息
-    """
+@st.cache_data(ttl=86400, show_spinner=False)
+def load_fund_manager_info(_source, fund_code: str):
+    """加载基金经理信息。"""
     try:
-        fund_code_clean = fund_code.split('.')[0]
-        df_manager = _pro.fund_manager(ts_code=fund_code)
-
-        if df_manager.empty:
+        df = _as_datasource(_source).fetch("fund_manager", code=fund_code)
+        if df is None or df.empty:
             st.warning(f"未找到基金 {fund_code} 的基金经理信息")
             return None
-
-        return df_manager
-
+        return df
     except Exception as e:
         st.error(f"加载基金经理信息失败: {str(e)}")
         return None
 
-@st.cache_data(ttl=3600)
-def load_fund_share_data(_pro, fund_code: str, start_date: str, end_date: str):
-    """
-    加载基金份额数据
 
-    Args:
-        _pro: Tushare Pro API对象
-        fund_code: 基金代码
-        start_date: 开始日期
-        end_date: 结束日期
-
-    Returns:
-        DataFrame: 基金份额数据
-    """
+@st.cache_data(ttl=3600, show_spinner=False)
+def load_fund_share_data(_source, fund_code: str, start_date: str, end_date: str):
+    """加载基金份额数据。"""
     try:
-        df_share = _pro.fund_share(ts_code=fund_code, start_date=start_date, end_date=end_date)
-
-        if df_share.empty:
+        df = _as_datasource(_source).fetch(
+            "fund_share", code=fund_code, start_date=start_date, end_date=end_date)
+        if df is None or df.empty:
             st.warning(f"未找到基金 {fund_code} 的份额数据")
             return None
-
-        return df_share
-
+        return df
     except Exception as e:
-        st.error(f"加载基金份额数据失败: {str(e)}")
+        st.error(f"加载份额数据失败: {str(e)}")
         return None
 
-@st.cache_data(ttl=86400)
-def load_fund_div_data(_pro, fund_code: str):
-    """
-    加载基金分红数据
 
-    Args:
-        _pro: Tushare Pro API对象
-        fund_code: 基金代码
-
-    Returns:
-        DataFrame: 基金分红数据
-    """
+@st.cache_data(ttl=86400, show_spinner=False)
+def load_fund_div_data(_source, fund_code: str):
+    """加载基金分红数据。"""
     try:
-        df_div = _pro.fund_div(ts_code=fund_code)
-
-        if df_div.empty:
+        df = _as_datasource(_source).fetch("fund_div", code=fund_code)
+        if df is None or df.empty:
             st.warning(f"未找到基金 {fund_code} 的分红数据")
             return None
-
-        return df_div
-
+        return df
     except Exception as e:
-        st.error(f"加载基金分红数据失败: {str(e)}")
+        st.error(f"加载分红数据失败: {str(e)}")
         return None
 
-@st.cache_data(ttl=3600)
-def load_benchmark_data(_pro, benchmark_code: str, start_date: str, end_date: str):
-    """
-    加载基准指数数据
 
-    Args:
-        _pro: Tushare Pro API对象
-        benchmark_code: 基准指数代码
-        start_date: 开始日期
-        end_date: 结束日期
-
-    Returns:
-        DataFrame: 基准指数数据
-    """
+@st.cache_data(ttl=3600, show_spinner=False)
+def load_benchmark_data(_source, benchmark_code: str, start_date: str, end_date: str):
+    """加载基准指数数据。"""
     try:
-        df_index = _pro.index_daily(ts_code=benchmark_code, start_date=start_date, end_date=end_date)
-
-        if df_index.empty:
+        df = _as_datasource(_source).fetch(
+            "index_daily", code=benchmark_code, start_date=start_date,
+            end_date=end_date)
+        if df is None or df.empty:
             st.warning(f"未找到基准指数 {benchmark_code} 的数据")
             return None
-
-        return df_index
-
+        return df
     except Exception as e:
         st.error(f"加载基准指数数据失败: {str(e)}")
         return None
 
+
 def preprocess_fund_data(df_raw):
-    """
-    预处理基金数据
-
-    Args:
-        df_raw: 原始数据DataFrame
-
-    Returns:
-        DataFrame: 预处理后的数据
-    """
+    """预处理基金数据（v1 逻辑保持不变）。"""
     if df_raw is None or df_raw.empty:
         return None
 
     try:
-        # 确保日期列存在并转换为datetime
-        if 'ann_date' in df_raw.columns:
+        if "ann_date" in df_raw.columns:
             df = df_raw.copy()
-            df['date'] = pd.to_datetime(df['ann_date'])
-        elif 'trade_date' in df_raw.columns:
+            df["date"] = pd.to_datetime(df_raw["ann_date"])
+        elif "trade_date" in df_raw.columns:
             df = df_raw.copy()
-            df['date'] = pd.to_datetime(df['trade_date'])
+            df["date"] = pd.to_datetime(df_raw["trade_date"])
+        elif "nav_date" in df_raw.columns:  # v2.0: fund_nav 规范日期列
+            df = df_raw.copy()
+            df["date"] = pd.to_datetime(df_raw["nav_date"])
         else:
             st.error("数据中未找到有效的日期列")
             return None
 
-        # 按日期排序
-        df = df.sort_values('date').reset_index(drop=True)
+        df = df.sort_values("date").reset_index(drop=True)
 
-        # 处理净值列
         nav_column = None
-        for col in ['unit_nav', 'adj_nav', 'close']:
+        for col in ["unit_nav", "adj_nav", "close"]:
             if col in df.columns:
                 nav_column = col
                 break
@@ -234,14 +180,9 @@ def preprocess_fund_data(df_raw):
             st.error("数据中未找到净值列")
             return None
 
-        df['nav'] = pd.to_numeric(df[nav_column], errors='coerce')
-
-        # 删除空值
-        df = df.dropna(subset=['nav', 'date'])
-
-        # 计算累计净值（归一化到1）
-        df['cum_nav'] = df['nav'] / df['nav'].iloc[0]
-
+        df["nav"] = pd.to_numeric(df[nav_column], errors="coerce")
+        df = df.dropna(subset=["nav", "date"])
+        df["cum_nav"] = df["nav"] / df["nav"].iloc[0]
         return df
 
     except Exception as e:
